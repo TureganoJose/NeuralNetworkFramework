@@ -1,0 +1,18 @@
+import numpy as np
+import scipy as sp
+
+
+class DenseLayer:
+    '''Basic definition of layer for neural networks'''
+
+    def __init__(self, n_inputs, n_nodes, activation_function):
+        # Create Attributes
+        self.n_nodes = n_nodes
+        self.n_inputs = n_inputs
+        self.act_func = activation_function
+
+
+class InputLayer:
+    '''Necessary basic input layer'''
+
+    def __init__(self,):
