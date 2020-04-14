@@ -3,95 +3,121 @@ import scipy as sp
 import gzip
 import pickle
 
+
 class DenseLayer:
-    '''Basic definition of layer for neural networks'''
+    """Basic definition of layer for neural networks"""
 
     def __init__(self, input_data: np.ndarray, n_nodes: int, activation_function: str):
         # Create Attributes
         self.input_data = input_data
         self.n_nodes = n_nodes
-        self.n_dim, self.n_samples  = input_data.shape # columns indicate the number of training samples
+        self.n_dim, self.n_samples = input_data.shape  # columns indicate the number of training samples
         self.activation_function = activation_function
 
         self.z = np.zeros((self.n_nodes, 1))
-        self.W = np.random.randint(0.1, size=(self.n_nodes, self.n_dim))
-        self.b = np.random.randint(0.1, size=(self.n_nodes, self.n_samples)) # Columns need to be similar
+        self.W = np.random.uniform(0.1, size=(self.n_nodes, self.n_dim))
+        self.b = np.repeat(np.random.uniform(0.1, size=(self.n_nodes, 1)), self.n_samples, axis=1) # Columns need to be similar
         self.a = np.zeros((self.n_nodes, 1))
 
     def forward_propagation(self):
 
         self.z = np.matmul(self.W, self.input_data) + self.b
         self.a = self.forward_activation(self.z)
+        return self.a
 
     def forward_activation(self, X):
         if self.activation_function == "sigmoid":
-            return 1.0/(1.0 + np.exp(-X))
+            return 1.0 / (1.0 + np.exp(-X))
         elif self.activation_function == "tanh":
             return np.tanh(X)
         elif self.activation_function == "relu":
-            return np.maximum(0,X)
+            return np.maximum(0, X)
         elif self.activation_function == "softmax":
             return np.exp(X) / np.sum(np.exp(X), axis=0)
 
     def grad_activation(self, X):
-        '''Note that inputs are the results of the activation function here
-        for example: X = sigmoid(z)'''
+        """Note that inputs are the results of the activation function here
+        for example: X = sigmoid(z)"""
         if self.activation_function == "sigmoid":
             return X * (1 - X)
         elif self.activation_function == "tanh":
             return (1 - np.square(X))
         elif self.activation_function == "relu":
             return 1.0 * (X > 0)
-        elif self.activation_function == 'softmax':
+        elif self.activation_function == "softmax":
             jacobian_s = np.diag(X)
             for i in range(len(jacobian_s)):
                 for j in range(len(jacobian_s)):
                     if i == j:
-                        jacobian_s[i][j]=X[i]*(1-X[i])
+                        jacobian_s[i][j] = X[i] * (1 - X[i])
                     else:
-                        jacobian_s[i][j]=-X[i]*X[j]
+                        jacobian_s[i][j] = -X[i] * X[j]
             return jacobian_s
+
+    def get_output_size(self):
+        return np.array([self.n_nodes, self.n_samples])
 
 
 class Network:
     """ Class contains layers"""
+
     def __init__(self, layers: list, input_data: np.ndarray):
-        self.layers = layers # This is a list of layer classes
+        self.layers = layers  # This is a list of layer classes
         self.input_data = input_data
+        self.output_values = []
 
     def forward_pass(self):
         output_values = []
         for ilayer, layer in enumerate(self.layers):
-            if ilayer ==1:
-                layer[ilayer].input_data = self.input_data
+            if ilayer == 0:
+                self.layers[ilayer].input_data = self.input_data
             else:
-                layer.input_data = output_values
-            output_values = layer.forward_propagation()
-        return output_values
+                self.layers[ilayer].input_data = output_values
+            output_values = self.layers[ilayer].forward_propagation()
+        self.output_values = output_values
+        return self.output_values
+
+    #def calculate_cost(self):
+
 
 class InputLayer:
-    '''Necessary basic input layer'''
+    """Necessary basic input layer"""
 
     def __init__(self, input_data: np.ndarray):
         self.input_data = input_data
 
+
 class OutputLayer:
-    '''Necessary basic outptut layer'''
-    def __init__(self,input_data: np.ndarray):
+    """Necessary basic outptut layer"""
+
+    def __init__(self, input_data: np.ndarray):
         self.input_data = input_data
 
 
-
-
-#### Load the MNIST data
-def load_data_shared(filename="../data/mnist.pkl.gz"):
+# Load the MNIST data
+def load_data_shared(filename="C:/Workspaces/NeuralNetworkFramework/data/mnist.pkl.gz"):
     f = gzip.open(filename, 'rb')
     training_data, validation_data, test_data = pickle.load(f, encoding="latin1")
     f.close()
     return training_data, validation_data, test_data
 
 
-
 training_data, validation_data, test_data = load_data_shared()
 
+training_data_input = training_data[0][:].transpose()
+training_data_output = training_data[1][:].transpose()
+
+layer1 = DenseLayer(training_data_input, 16, "sigmoid")
+layer2 = DenseLayer(np.zeros( layer1.get_output_size()), 16, "sigmoid")
+layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 10, "softmax")
+
+
+layer_list = [layer1, layer2, layer3]
+
+NN = Network(layer_list, training_data_input )
+
+output_values = NN.forward_pass()
+
 print(training_data)
+
+
