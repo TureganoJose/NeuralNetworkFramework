@@ -18,6 +18,10 @@ class DenseLayer:
         self.W = np.random.uniform(0.1, size=(self.n_nodes, self.n_dim))
         self.b = np.repeat(np.random.uniform(0.1, size=(self.n_nodes, 1)), self.n_samples, axis=1) # Columns need to be similar
         self.a = np.zeros((self.n_nodes, 1))
+        self.da_dz = []
+        self.dJ_dw = np.zeros((self.n_samples, self.n_nodes, self.n_dim))
+        self.dJ_db = np.zeros((self.n_nodes, self.n_samples ))
+        self.delta = []
 
     def forward_propagation(self):
 
@@ -39,20 +43,23 @@ class DenseLayer:
         """Note that inputs are the results of the activation function here
         for example: X = sigmoid(z)"""
         if self.activation_function == "sigmoid":
-            return X * (1 - X)
+            self.da_dz = X * (1 - X)
         elif self.activation_function == "tanh":
-            return (1 - np.square(X))
+            self.da_dz =  (1 - np.square(X))
         elif self.activation_function == "relu":
-            return 1.0 * (X > 0)
+            self.da_dz =  1.0 * (X > 0)
         elif self.activation_function == "softmax":
-            jacobian_s = np.diag(X)
-            for i in range(len(jacobian_s)):
-                for j in range(len(jacobian_s)):
-                    if i == j:
-                        jacobian_s[i][j] = X[i] * (1 - X[i])
-                    else:
-                        jacobian_s[i][j] = -X[i] * X[j]
-            return jacobian_s
+            # Usually softmax is in the output layer hence n_nodes = n_outputs
+            # Each sample has its own Jacobian size(n_outputs x n_outputs)
+            jacobian_a = np.zeros((self.n_samples, self.n_nodes, self.n_nodes))
+            for sample in range(self.n_samples):
+                for i in range(self.n_nodes):
+                    for j in range(self.n_nodes):
+                        if i == j:
+                            jacobian_a[sample,i,j] = X[i][sample] * (1 - X[i][sample])
+                        else:
+                            jacobian_a[sample,i,j] = -X[i][sample] * X[j][sample]
+            self.da_dz = jacobian_a
 
     def get_output_size(self):
         return np.array([self.n_nodes, self.n_samples])
@@ -61,10 +68,15 @@ class DenseLayer:
 class Network:
     """ Class contains layers"""
 
-    def __init__(self, layers: list, input_data: np.ndarray):
+    def __init__(self, layers: list, input_data: np.ndarray, output_targets: np.array, learning_rate: float):
         self.layers = layers  # This is a list of layer classes
         self.input_data = input_data
+        self.n_dim, self.n_samples = input_data.shape  # columns indicate the number of training samples
         self.output_values = []
+        self.matrix_cost = []
+        self.output_targets = output_targets
+        self.learning_rate = learning_rate
+        self.dJ_da = []
 
     def forward_pass(self):
         output_values = []
@@ -75,10 +87,66 @@ class Network:
                 self.layers[ilayer].input_data = output_values
             output_values = self.layers[ilayer].forward_propagation()
         self.output_values = output_values
-        return self.output_values
 
-    #def calculate_cost(self):
+    def calculate_matrix_cost(self):
+        self.matrix_cost = - (((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))
 
+    def calculate_cost(self):
+        return - np.sum(((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))/self.n_samples
+
+    def derivative_cost(self):
+        """Derivative of cost relative to a or last layer's activation function, softmax usually dJ_da"""
+        self.dJ_da = (self.output_values - self.output_targets)/(self.output_values - np.multiply(self.output_values, self.output_values))
+
+    def backpropagation(self):
+
+        self.forward_pass()
+        self.calculate_matrix_cost()
+        total_cost = self.calculate_cost()
+        print(total_cost)
+        # First calculate error (self.delta) of output layer
+        L = len(self.layers)-1
+        # Number of outputs equal to number of nodes of the output layer
+        self.layers[L].delta = np.zeros((self.layers[L].n_nodes, self.n_samples))
+        self.derivative_cost() # Calculates dJ_da of output layer
+        self.layers[L].grad_activation(self.layers[L].z) # Calculates da_dz
+        if self.layers[L].activation_function == "softmax":
+            # Softmax case is a bit special because Jacobian
+            for sample in range(self.n_samples):
+                self.layers[L].delta[:, sample] = np.matmul(self.layers[L].da_dz[sample], self.dJ_da[:, sample])
+        else:
+            self.layers[L].delta = np.multiply(self.layers[L].da_dz, self.dJ_da)
+
+        # For each sample we calculate the dJ_dw and dJ_db
+        # size(dJ_dw) = (samples, size of W matrix)
+        #self.layers[L].dJ_dw = np.zeros((self.n_samples, self.layers[L].n_nodes, self.layers[L].n_dim))
+        # Preferred matrix arranged in columns for each sample so no need to loop through it
+        # self.layers[L].dJ_db = np.zeros((self.layers[L].n_nodes,self.n_samples ))
+        self.layers[L].dJ_db = self.layers[L].delta
+        for sample in range(self.n_samples):
+            self.layers[L].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[L].delta[:,sample][np.newaxis]), self.layers[L-1].a[:,sample][np.newaxis])
+
+        # Loop through the rest of layers from L-1 to 1
+        for iLayer in range(L-1,-1,-1): # range(start,stop,step)
+            self.layers[iLayer].grad_activation(self.layers[iLayer].z)  # Calculates da_dz
+            self.layers[iLayer].delta = np.multiply(np.matmul(self.layers[iLayer+1].W.transpose(), self.layers[iLayer+1].delta), self.layers[iLayer].da_dz)
+            # For each sample we calculate the dJ_dw and dJ_db
+            # size(dJ_dw) = (samples, size of W matrix)
+            self.layers[iLayer].dJ_dw = np.zeros((self.n_samples, self.layers[iLayer].n_nodes, self.layers[iLayer].n_dim))
+            # Preferred matrix arranged in columns for each sample so no need to loop through it
+            self.layers[iLayer].dJ_db = np.zeros((self.layers[iLayer].n_nodes, self.n_samples))
+            self.layers[iLayer].dJ_db = self.layers[iLayer].delta
+            for sample in range(self.n_samples):
+                if iLayer - 1 < 0:  # In this case the iLayer-1 is equal to the input layer
+                    self.layers[iLayer].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[iLayer].delta[:, sample][np.newaxis]), self.input_data[:, sample][np.newaxis])
+                else:
+                    self.layers[iLayer].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[iLayer].delta[:, sample][np.newaxis]), self.layers[iLayer - 1].a[:, sample][np.newaxis])
+
+        # For each layer update weights. The correction of the wights is the average of the dJ/dw and dJ/db for all
+        # the training sample
+        for ilayer, layer in enumerate(self.layers):
+            self.layers[ilayer].W = self.layers[ilayer].W - (self.learning_rate/self.n_samples)*self.layers[ilayer].dJ_dw.sum(axis=0)
+            self.layers[ilayer].b = self.layers[ilayer].b - (self.learning_rate/self.n_samples)*self.layers[ilayer].dJ_db
 
 class InputLayer:
     """Necessary basic input layer"""
@@ -104,19 +172,26 @@ def load_data_shared(filename="C:/Workspaces/NeuralNetworkFramework/data/mnist.p
 
 training_data, validation_data, test_data = load_data_shared()
 
-training_data_input = training_data[0][:].transpose()
-training_data_output = training_data[1][:].transpose()
 
-layer1 = DenseLayer(training_data_input, 16, "sigmoid")
+# Only 5000 samples otherwise running out of memory
+training_data_input = training_data[0][0:5000].transpose()
+# One-hot encoding the outputs
+training_data_outputs = np.zeros((10, training_data_input.shape[1]))
+for iPos in range(training_data_input.shape[1]):
+    training_data_outputs[training_data[1][iPos]][iPos] = 1
+
+
+layer1 = DenseLayer(training_data_input, 32, "sigmoid")
 layer2 = DenseLayer(np.zeros( layer1.get_output_size()), 16, "sigmoid")
 layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 10, "softmax")
 
 
 layer_list = [layer1, layer2, layer3]
 
-NN = Network(layer_list, training_data_input )
+NN = Network(layer_list, training_data_input, training_data_outputs, learning_rate = 0.001)
 
-output_values = NN.forward_pass()
+NN.backpropagation()
+
 
 print(training_data)
 
