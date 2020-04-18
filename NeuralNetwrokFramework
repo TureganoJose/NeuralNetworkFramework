@@ -15,8 +15,8 @@ class DenseLayer:
         self.activation_function = activation_function
 
         self.z = np.zeros((self.n_nodes, 1))
-        self.W = np.random.uniform(0.1, size=(self.n_nodes, self.n_dim))
-        self.b = np.repeat(np.random.uniform(0.1, size=(self.n_nodes, 1)), self.n_samples, axis=1) # Columns need to be similar
+        self.W = np.random.uniform(0.0001, 0.1, size=(self.n_nodes, self.n_dim))
+        self.b = np.repeat(np.random.uniform(0.0001, 0.1, size=(self.n_nodes, 1)), self.n_samples, axis=1) # Columns need to be similar
         self.a = np.zeros((self.n_nodes, 1))
         self.da_dz = []
         self.dJ_dw = np.zeros((self.n_samples, self.n_nodes, self.n_dim))
@@ -24,10 +24,23 @@ class DenseLayer:
         self.delta = []
 
     def forward_propagation(self):
-
         self.z = np.matmul(self.W, self.input_data) + self.b
         self.a = self.forward_activation(self.z)
         return self.a
+
+    def forward_propagation_offset(self, input_values, j , k, offset):
+        tempW = self.W
+        tempW[j, k] = self.W[j, k] + offset
+        tempz = np.matmul(tempW, input_values) + self.b
+        tempa = self.forward_activation(tempz)
+        return tempa
+
+    def forward_propagation_boffset(self, input_values, j , boffset):
+        tempb = self.b
+        tempb[j,:] = self.b[j,:] + boffset
+        tempz = np.matmul(self.W, input_values) + tempb
+        tempa = self.forward_activation(tempz)
+        return tempa
 
     def forward_activation(self, X):
         if self.activation_function == "sigmoid":
@@ -37,6 +50,7 @@ class DenseLayer:
         elif self.activation_function == "relu":
             return np.maximum(0, X)
         elif self.activation_function == "softmax":
+            # stable version is np.exp(X - np.max(X))/ np.sum(np.exp(X), axis=0)
             return np.exp(X) / np.sum(np.exp(X), axis=0)
 
     def grad_activation(self, X):
@@ -49,6 +63,7 @@ class DenseLayer:
         elif self.activation_function == "relu":
             self.da_dz =  1.0 * (X > 0)
         elif self.activation_function == "softmax":
+            A = self.forward_activation(X)
             # Usually softmax is in the output layer hence n_nodes = n_outputs
             # Each sample has its own Jacobian size(n_outputs x n_outputs)
             jacobian_a = np.zeros((self.n_samples, self.n_nodes, self.n_nodes))
@@ -56,9 +71,9 @@ class DenseLayer:
                 for i in range(self.n_nodes):
                     for j in range(self.n_nodes):
                         if i == j:
-                            jacobian_a[sample,i,j] = X[i][sample] * (1 - X[i][sample])
+                            jacobian_a[sample,i,j] = A[i][sample] * (1 - A[i][sample])
                         else:
-                            jacobian_a[sample,i,j] = -X[i][sample] * X[j][sample]
+                            jacobian_a[sample,i,j] = -A[i][sample] * A[j][sample]
             self.da_dz = jacobian_a
 
     def get_output_size(self):
@@ -68,7 +83,7 @@ class DenseLayer:
 class Network:
     """ Class contains layers"""
 
-    def __init__(self, layers: list, input_data: np.ndarray, output_targets: np.array, learning_rate: float):
+    def __init__(self, layers: list, input_data: np.ndarray, output_targets: np.array, learning_rate: float, n_epoch: int):
         self.layers = layers  # This is a list of layer classes
         self.input_data = input_data
         self.n_dim, self.n_samples = input_data.shape  # columns indicate the number of training samples
@@ -77,6 +92,7 @@ class Network:
         self.output_targets = output_targets
         self.learning_rate = learning_rate
         self.dJ_da = []
+        self.n_epoch = n_epoch
 
     def forward_pass(self):
         output_values = []
@@ -88,21 +104,76 @@ class Network:
             output_values = self.layers[ilayer].forward_propagation()
         self.output_values = output_values
 
-    def calculate_matrix_cost(self):
-        self.matrix_cost = - (((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))
+    def forward_pass_offset(self, ilayer_w, j, k, offset):
+        output_temep = []
+        for ilayer, layer in enumerate(self.layers):
+            if ilayer == 0:
+                if ilayer_w == ilayer:
+                    output_temp = self.layers[ilayer].forward_propagation_offset(self.input_data, j, k, offset)
+                else:
+                    output_temp = self.layers[ilayer].forward_propagation_offset(self.input_data, 0, 0, 0.0)
+            else:
+                if ilayer_w == ilayer:
+                    output_temp = self.layers[ilayer].forward_propagation_offset(output_temp, j, k, offset)
+                else:
+                    output_temp = self.layers[ilayer].forward_propagation_offset(output_temp, 0, 0, 0.0)
 
-    def calculate_cost(self):
-        return - np.sum(((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))/self.n_samples
+        return output_temp
+
+    def forward_pass_boffset(self, ilayer_b, j, boffset):
+        output_temep = []
+        for ilayer, layer in enumerate(self.layers):
+            if ilayer == 0:
+                if ilayer_b == ilayer:
+                    output_temp = self.layers[ilayer].forward_propagation_boffset(self.input_data, j, boffset)
+                else:
+                    output_temp = self.layers[ilayer].forward_propagation_boffset(self.input_data, j, 0.0)
+            else:
+                if ilayer_b == ilayer:
+                    output_temp = self.layers[ilayer].forward_propagation_boffset(output_temp, j, boffset)
+                else:
+                    output_temp = self.layers[ilayer].forward_propagation_boffset(output_temp, j, 0.0)
+
+        return output_temp
+
+
+
+    def dJ_dw_diff(self, ilayer_w, j, k, offset):
+        temp_outputs = self.forward_pass_offset(ilayer_w, j, k, offset)
+        delta_J = self.calculate_cost_pred(temp_outputs) - self.calculate_cost_pred(self.output_values)
+        delta_w = offset
+        return delta_J/delta_w
+
+    def dJ_db_diff(self, ilayer_b, j, b_offset):
+        temp_outputs = self.forward_pass_boffset(ilayer_b, j, b_offset)
+        delta_J = self.calculate_cost_pred(temp_outputs) - self.calculate_cost_pred(self.output_values)
+        delta_b = b_offset
+        return delta_J/delta_b
+
+    def calculate_matrix_cost(self):
+        # self.output_values - self.output_targets
+        # (((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))
+        self.matrix_cost = - np.multiply(self.output_targets, np.log(self.output_values))
+
+    def calculate_total_cost(self):
+        # - np.sum(((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))/self.n_samples
+        return - (1/self.n_samples)*np.sum(np.multiply(self.output_targets, np.log(self.output_values)))
+
+    def calculate_cost_pred(self, input_predictions):
+        # - np.sum(((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))/self.n_samples
+        return - (1/1) * np.sum(np.multiply(self.output_targets, np.log(input_predictions)), axis=0)
+
 
     def derivative_cost(self):
+        #  (self.matrix_cost - self.output_targets)/(self.matrix_cost - np.multiply(self.matrix_cost, self.matrix_cost))
         """Derivative of cost relative to a or last layer's activation function, softmax usually dJ_da"""
-        self.dJ_da = (self.output_values - self.output_targets)/(self.output_values - np.multiply(self.output_values, self.output_values))
+        self.dJ_da = np.divide(-self.output_targets, self.output_values)
 
     def backpropagation(self):
 
         self.forward_pass()
         self.calculate_matrix_cost()
-        total_cost = self.calculate_cost()
+        total_cost = self.calculate_total_cost()
         print(total_cost)
         # First calculate error (self.delta) of output layer
         L = len(self.layers)-1
@@ -126,6 +197,20 @@ class Network:
         for sample in range(self.n_samples):
             self.layers[L].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[L].delta[:,sample][np.newaxis]), self.layers[L-1].a[:,sample][np.newaxis])
 
+        testing = self.output_values - self.output_targets
+
+
+
+        for ilayer in range(L+1):  # range(start,stop,step)
+            self.layers[ilayer].dJ_db = np.zeros((self.layers[ilayer].n_nodes, self.n_samples))
+            self.layers[ilayer].dJ_dw = np.zeros((self.n_samples, self.layers[ilayer].n_nodes, self.layers[ilayer].n_dim))
+            #for isample in range(self.n_samples):
+            for inode in range(self.layers[ilayer].n_nodes):
+                self.layers[ilayer].dJ_db[inode,:] =  self.dJ_db_diff(ilayer, inode, 0.001)[:]
+                for jnode in range(self.layers[ilayer].n_dim):
+                    self.layers[ilayer].dJ_dw[:, inode, jnode] = self.dJ_dw_diff(ilayer, inode, jnode, 0.001)[:]
+
+        """
         # Loop through the rest of layers from L-1 to 1
         for iLayer in range(L-1,-1,-1): # range(start,stop,step)
             self.layers[iLayer].grad_activation(self.layers[iLayer].z)  # Calculates da_dz
@@ -141,12 +226,16 @@ class Network:
                     self.layers[iLayer].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[iLayer].delta[:, sample][np.newaxis]), self.input_data[:, sample][np.newaxis])
                 else:
                     self.layers[iLayer].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[iLayer].delta[:, sample][np.newaxis]), self.layers[iLayer - 1].a[:, sample][np.newaxis])
-
+        """
         # For each layer update weights. The correction of the wights is the average of the dJ/dw and dJ/db for all
         # the training sample
         for ilayer, layer in enumerate(self.layers):
             self.layers[ilayer].W = self.layers[ilayer].W - (self.learning_rate/self.n_samples)*self.layers[ilayer].dJ_dw.sum(axis=0)
-            self.layers[ilayer].b = self.layers[ilayer].b - (self.learning_rate/self.n_samples)*self.layers[ilayer].dJ_db
+            self.layers[ilayer].b = self.layers[ilayer].b - (self.learning_rate/self.n_samples)*np.sum(self.layers[ilayer].dJ_db, axis=1)[np.newaxis].transpose()
+
+    def training(self):
+        for iepoch in range(self.n_epoch):
+            self.backpropagation()
 
 class InputLayer:
     """Necessary basic input layer"""
@@ -160,7 +249,6 @@ class OutputLayer:
 
     def __init__(self, input_data: np.ndarray):
         self.input_data = input_data
-
 
 # Load the MNIST data
 def load_data_shared(filename="C:/Workspaces/NeuralNetworkFramework/data/mnist.pkl.gz"):
@@ -188,9 +276,11 @@ layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 10, "softmax")
 
 layer_list = [layer1, layer2, layer3]
 
-NN = Network(layer_list, training_data_input, training_data_outputs, learning_rate = 0.001)
+NN = Network(layer_list, training_data_input, training_data_outputs, learning_rate=0.01, n_epoch=10)
 
-NN.backpropagation()
+NN.training()
+
+# NN.backpropagation()
 
 
 print(training_data)
