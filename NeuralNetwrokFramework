@@ -201,16 +201,15 @@ class Network:
 
 
 
-        for ilayer in range(L+1):  # range(start,stop,step)
-            self.layers[ilayer].dJ_db = np.zeros((self.layers[ilayer].n_nodes, self.n_samples))
-            self.layers[ilayer].dJ_dw = np.zeros((self.n_samples, self.layers[ilayer].n_nodes, self.layers[ilayer].n_dim))
-            #for isample in range(self.n_samples):
-            for inode in range(self.layers[ilayer].n_nodes):
-                self.layers[ilayer].dJ_db[inode,:] =  self.dJ_db_diff(ilayer, inode, 0.001)[:]
-                for jnode in range(self.layers[ilayer].n_dim):
-                    self.layers[ilayer].dJ_dw[:, inode, jnode] = self.dJ_dw_diff(ilayer, inode, jnode, 0.001)[:]
+        #or ilayer in range(L+1):  # range(start,stop,step)
+        #   self.layers[ilayer].dJ_db = np.zeros((self.layers[ilayer].n_nodes, self.n_samples))
+        #   self.layers[ilayer].dJ_dw = np.zeros((self.n_samples, self.layers[ilayer].n_nodes, self.layers[ilayer].n_dim))
+        #   #for isample in range(self.n_samples):
+        #   for inode in range(self.layers[ilayer].n_nodes):
+        #       self.layers[ilayer].dJ_db[inode,:] =  self.dJ_db_diff(ilayer, inode, 0.001)[:]
+        #       for jnode in range(self.layers[ilayer].n_dim):
+        #           self.layers[ilayer].dJ_dw[:, inode, jnode] = self.dJ_dw_diff(ilayer, inode, jnode, 0.001)[:]
 
-        """
         # Loop through the rest of layers from L-1 to 1
         for iLayer in range(L-1,-1,-1): # range(start,stop,step)
             self.layers[iLayer].grad_activation(self.layers[iLayer].z)  # Calculates da_dz
@@ -226,7 +225,7 @@ class Network:
                     self.layers[iLayer].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[iLayer].delta[:, sample][np.newaxis]), self.input_data[:, sample][np.newaxis])
                 else:
                     self.layers[iLayer].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[iLayer].delta[:, sample][np.newaxis]), self.layers[iLayer - 1].a[:, sample][np.newaxis])
-        """
+
         # For each layer update weights. The correction of the wights is the average of the dJ/dw and dJ/db for all
         # the training sample
         for ilayer, layer in enumerate(self.layers):
