@@ -211,7 +211,7 @@ class Network:
         #           self.layers[ilayer].dJ_dw[:, inode, jnode] = self.dJ_dw_diff(ilayer, inode, jnode, 0.001)[:]
 
         # Loop through the rest of layers from L-1 to 1
-        for iLayer in range(L-1,-1,-1): # range(start,stop,step)
+        for iLayer in range(L-1, -1,-1): # range(start,stop,step)
             self.layers[iLayer].grad_activation(self.layers[iLayer].z)  # Calculates da_dz
             self.layers[iLayer].delta = np.multiply(np.matmul(self.layers[iLayer+1].W.transpose(), self.layers[iLayer+1].delta), self.layers[iLayer].da_dz)
             # For each sample we calculate the dJ_dw and dJ_db
