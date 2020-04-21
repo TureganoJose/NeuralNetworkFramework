@@ -20,7 +20,7 @@ class DenseLayer:
 
         self.W = np.random.randn(self.n_nodes, self.n_dim)*np.sqrt(1/((self.n_nodes + self.n_dim)))
         #self.W = np.random.uniform(-1, 1, size=(self.n_nodes, self.n_dim))
-        self.b = np.zeros((self.n_nodes, 1))
+        self.b = np.ones((self.n_nodes, 1))
         #np.repeat(np.random.uniform(0.0001, 0.1, size=(self.n_nodes, 1)), 1, axis=1) # Columns need to be similar
         self.a = np.zeros((self.n_nodes, 1))
         self.da_dz = []
@@ -92,6 +92,17 @@ class Network:
         self.dJ_da = []
         self.n_epoch = n_epoch
 
+    def forward_pass_full_training_set(self):
+        output_values = []
+        for ilayer, layer in enumerate(self.layers):
+            if ilayer == 0:
+                self.layers[ilayer].input_data = self.input_data
+            else:
+                self.layers[ilayer].input_data = output_values
+            output_values = self.layers[ilayer].forward_propagation()
+        return output_values
+
+
     def forward_pass(self, isample):
         output_values = []
         for ilayer, layer in enumerate(self.layers):
@@ -108,7 +119,20 @@ class Network:
     def derivative_cost(self, predictions, isample):
         #  (self.matrix_cost - self.output_targets)/(self.matrix_cost - np.multiply(self.matrix_cost, self.matrix_cost))
         """Derivative of cost relative to a or last layer's activation function, softmax usually dJ_da"""
-        return np.divide(-self.output_targets[:, isample][np.newaxis].transpose(), predictions)
+        #https://condor.depaul.edu/~ntomuro/courses/578/notes/3-Backprop-More.pdf
+        #return np.divide(-self.output_targets[:, isample][np.newaxis].transpose(), predictions)
+        return np.divide(predictions - self.output_targets[:, isample][np.newaxis].transpose(), predictions * (1- predictions))
+
+    # an auxiliary function that converts probability into class
+    def convert_prob_into_binary(self, predictions, threshold):
+        predictions_binary = np.copy(predictions)
+        predictions_binary[predictions_binary > threshold] = 1
+        predictions_binary[predictions_binary <= threshold] = 0
+        return predictions_binary
+
+    def get_accuracy(self, predictions):
+        prediction_binary = self.convert_prob_into_binary(predictions, 0.5)
+        return (prediction_binary == self.output_targets).all(axis=0).mean()
 
     def backpropagation(self):
         for isample in range(self.n_samples):
@@ -157,7 +181,7 @@ class Network:
                     delta_temp = delta_cost*da_dz #np.matmul(da_dz, delta_cost)
                     temp = np.dot(delta_temp , self.layers[iLayer-1].a.T)
                     self.layers[iLayer].W += self.learning_rate * temp
-                    #self.layers[iLayer].b -= self.learning_rate * delta_temp
+                    self.layers[iLayer].b -= self.learning_rate * delta_temp
                     delta = np.dot(self.layers[iLayer].W.T, delta_cost)
                 else:
                     da_dz = self.layers[iLayer].grad_activation(self.layers[iLayer].z)
@@ -167,7 +191,7 @@ class Network:
                     else:
                         temp = np.dot(delta_temp, self.layers[iLayer-1].a.T)
                     self.layers[iLayer].W += self.learning_rate * temp
-                    #self.layers[iLayer].b += self.learning_rate * delta_temp
+                    self.layers[iLayer].b += self.learning_rate * delta_temp
                     delta = np.dot(self.layers[iLayer].W.T, delta)
 
             ## Loop through all layers from L to 0
@@ -191,11 +215,15 @@ class Network:
         # for ilayer, layer in enumerate(self.layers):
         #     self.layers[ilayer].W = self.layers[ilayer].W - (self.learning_rate/self.n_samples)*self.layers[ilayer].dJ_dw_total
         #     self.layers[ilayer].b = self.layers[ilayer].b - (self.learning_rate/self.n_samples)*self.layers[ilayer].dJ_db_total
-        sample_cost = self.calculate_total_cost(predictions, 0)
-        print(sample_cost)
+        #sample_cost = self.calculate_total_cost(predictions, 0)
+        #print(sample_cost)
     def training(self):
         for iepoch in range(self.n_epoch):
             self.backpropagation()
+            predictions = self.forward_pass_full_training_set()
+            accuracy = self.get_accuracy(predictions)
+            print("epoch", iepoch, "accuracy", accuracy)
+
 
 
 
