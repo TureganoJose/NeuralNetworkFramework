@@ -176,7 +176,7 @@ class Network:
             #    self.layers[iLayer].dJ_dw_total = self.layers[iLayer].dJ_dw_total + self.layers[iLayer].dJ_dw
             #    self.layers[iLayer].dJ_db_total = self.layers[iLayer].dJ_db_total + self.layers[iLayer].dJ_db
 
-            for iLayer in range(L,-1,-1):
+            for iLayer in range(L, -1, -1):
                 if iLayer == L:
                     delta_temp = delta_cost*da_dz #np.matmul(da_dz, delta_cost)
                     temp = np.dot(delta_temp , self.layers[iLayer-1].a.T)

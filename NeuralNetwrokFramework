@@ -15,8 +15,8 @@ class DenseLayer:
         self.activation_function = activation_function
 
         self.z = np.zeros((self.n_nodes, 1))
-        self.W = np.random.uniform(0.0001, 0.1, size=(self.n_nodes, self.n_dim))
-        self.b = np.repeat(np.random.uniform(0.0001, 0.1, size=(self.n_nodes, 1)), self.n_samples, axis=1) # Columns need to be similar
+        self.W = np.random.randn(self.n_nodes, self.n_dim)*np.sqrt(1/((self.n_nodes + self.n_dim)))
+        self.b = np.ones((self.n_nodes, self.n_samples))  # Columns need to be similar
         self.a = np.zeros((self.n_nodes, 1))
         self.da_dz = []
         self.dJ_dw = np.zeros((self.n_samples, self.n_nodes, self.n_dim))
@@ -24,7 +24,7 @@ class DenseLayer:
         self.delta = []
 
     def forward_propagation(self):
-        self.z = np.matmul(self.W, self.input_data) + self.b
+        self.z = np.dot(self.W, self.input_data) + self.b
         self.a = self.forward_activation(self.z)
         return self.a
 
@@ -42,28 +42,31 @@ class DenseLayer:
         tempa = self.forward_activation(tempz)
         return tempa
 
-    def forward_activation(self, X):
+    def forward_activation(self, z):
         if self.activation_function == "sigmoid":
-            return 1.0 / (1.0 + np.exp(-X))
+            # Prevent overflow.
+            z = np.clip(z, -500, 500)
+            return 1.0 / (1.0 + np.exp(-z))
         elif self.activation_function == "tanh":
-            return np.tanh(X)
+            return np.tanh(z)
         elif self.activation_function == "relu":
-            return np.maximum(0, X)
+            return np.maximum(0, z)
         elif self.activation_function == "softmax":
             # stable version is np.exp(X - np.max(X))/ np.sum(np.exp(X), axis=0)
-            return np.exp(X) / np.sum(np.exp(X), axis=0)
+            return np.exp(z) / np.sum(np.exp(z), axis=0)
 
-    def grad_activation(self, X):
+    def grad_activation(self, z):
         """Note that inputs are the results of the activation function here
         for example: X = sigmoid(z)"""
         if self.activation_function == "sigmoid":
-            self.da_dz = X * (1 - X)
+            a = self.forward_activation(z)
+            self.da_dz = a*(1-a)
         elif self.activation_function == "tanh":
-            self.da_dz =  (1 - np.square(X))
+            self.da_dz = (1 - np.square(z))
         elif self.activation_function == "relu":
-            self.da_dz =  1.0 * (X > 0)
+            self.da_dz = 1.0 * (z > 0)
         elif self.activation_function == "softmax":
-            A = self.forward_activation(X)
+            a= self.forward_activation(z)
             # Usually softmax is in the output layer hence n_nodes = n_outputs
             # Each sample has its own Jacobian size(n_outputs x n_outputs)
             jacobian_a = np.zeros((self.n_samples, self.n_nodes, self.n_nodes))
@@ -71,10 +74,11 @@ class DenseLayer:
                 for i in range(self.n_nodes):
                     for j in range(self.n_nodes):
                         if i == j:
-                            jacobian_a[sample,i,j] = A[i][sample] * (1 - A[i][sample])
+                            jacobian_a[sample,i,j] = a[i][sample] * (1 - a[i][sample])
                         else:
-                            jacobian_a[sample,i,j] = -A[i][sample] * A[j][sample]
+                            jacobian_a[sample,i,j] = -a[i][sample] * a[j][sample]
             self.da_dz = jacobian_a
+        return self.da_dz
 
     def get_output_size(self):
         return np.array([self.n_nodes, self.n_samples])
@@ -103,40 +107,7 @@ class Network:
                 self.layers[ilayer].input_data = output_values
             output_values = self.layers[ilayer].forward_propagation()
         self.output_values = output_values
-
-    def forward_pass_offset(self, ilayer_w, j, k, offset):
-        output_temep = []
-        for ilayer, layer in enumerate(self.layers):
-            if ilayer == 0:
-                if ilayer_w == ilayer:
-                    output_temp = self.layers[ilayer].forward_propagation_offset(self.input_data, j, k, offset)
-                else:
-                    output_temp = self.layers[ilayer].forward_propagation_offset(self.input_data, 0, 0, 0.0)
-            else:
-                if ilayer_w == ilayer:
-                    output_temp = self.layers[ilayer].forward_propagation_offset(output_temp, j, k, offset)
-                else:
-                    output_temp = self.layers[ilayer].forward_propagation_offset(output_temp, 0, 0, 0.0)
-
-        return output_temp
-
-    def forward_pass_boffset(self, ilayer_b, j, boffset):
-        output_temep = []
-        for ilayer, layer in enumerate(self.layers):
-            if ilayer == 0:
-                if ilayer_b == ilayer:
-                    output_temp = self.layers[ilayer].forward_propagation_boffset(self.input_data, j, boffset)
-                else:
-                    output_temp = self.layers[ilayer].forward_propagation_boffset(self.input_data, j, 0.0)
-            else:
-                if ilayer_b == ilayer:
-                    output_temp = self.layers[ilayer].forward_propagation_boffset(output_temp, j, boffset)
-                else:
-                    output_temp = self.layers[ilayer].forward_propagation_boffset(output_temp, j, 0.0)
-
-        return output_temp
-
-
+        return self.output_values
 
     def dJ_dw_diff(self, ilayer_w, j, k, offset):
         temp_outputs = self.forward_pass_offset(ilayer_w, j, k, offset)
@@ -164,77 +135,67 @@ class Network:
         return - (1/1) * np.sum(np.multiply(self.output_targets, np.log(input_predictions)), axis=0)
 
 
-    def derivative_cost(self):
+    def derivative_cost(self, predictions):
         #  (self.matrix_cost - self.output_targets)/(self.matrix_cost - np.multiply(self.matrix_cost, self.matrix_cost))
         """Derivative of cost relative to a or last layer's activation function, softmax usually dJ_da"""
-        self.dJ_da = np.divide(-self.output_targets, self.output_values)
+        #https://condor.depaul.edu/~ntomuro/courses/578/notes/3-Backprop-More.pdf
+        #return np.divide(-self.output_targets[:, isample][np.newaxis].transpose(), predictions)
+        return np.divide(predictions - self.output_targets[:, :][np.newaxis].transpose(), predictions * (1-predictions))
+
+    # an auxiliary function that converts probability into class
+    def convert_prob_into_binary(self, predictions, threshold):
+        predictions_binary = np.copy(predictions)
+        predictions_binary[predictions_binary > threshold] = 1
+        predictions_binary[predictions_binary <= threshold] = 0
+        return predictions_binary
+
+    def get_accuracy(self, predictions):
+        prediction_binary = self.convert_prob_into_binary(predictions, 0.5)
+        return (prediction_binary == self.output_targets).all(axis=0).mean()
 
     def backpropagation(self):
-
-        self.forward_pass()
-        self.calculate_matrix_cost()
-        total_cost = self.calculate_total_cost()
-        print(total_cost)
+        predictions = self.forward_pass()
         # First calculate error (self.delta) of output layer
-        L = len(self.layers)-1
+        L = len(self.layers) - 1
         # Number of outputs equal to number of nodes of the output layer
         self.layers[L].delta = np.zeros((self.layers[L].n_nodes, self.n_samples))
-        self.derivative_cost() # Calculates dJ_da of output layer
-        self.layers[L].grad_activation(self.layers[L].z) # Calculates da_dz
+        dCost_da = self.derivative_cost(predictions)  # Calculates dJ_da of output layer
+        da_dz = self.layers[L].grad_activation(self.layers[L].z)  # Calculates da_dz
         if self.layers[L].activation_function == "softmax":
             # Softmax case is a bit special because Jacobian
             for sample in range(self.n_samples):
-                self.layers[L].delta[:, sample] = np.matmul(self.layers[L].da_dz[sample], self.dJ_da[:, sample])
+                delta_cost = np.matmul(da_dz, dCost_da)
         else:
-            self.layers[L].delta = np.multiply(self.layers[L].da_dz, self.dJ_da)
+            delta_cost = np.multiply(da_dz, dCost_da)
 
-        # For each sample we calculate the dJ_dw and dJ_db
-        # size(dJ_dw) = (samples, size of W matrix)
-        #self.layers[L].dJ_dw = np.zeros((self.n_samples, self.layers[L].n_nodes, self.layers[L].n_dim))
-        # Preferred matrix arranged in columns for each sample so no need to loop through it
-        # self.layers[L].dJ_db = np.zeros((self.layers[L].n_nodes,self.n_samples ))
-        self.layers[L].dJ_db = self.layers[L].delta
-        for sample in range(self.n_samples):
-            self.layers[L].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[L].delta[:,sample][np.newaxis]), self.layers[L-1].a[:,sample][np.newaxis])
+        delta_cost = self.output_targets - predictions
 
-        testing = self.output_values - self.output_targets
-
-
-
-        #or ilayer in range(L+1):  # range(start,stop,step)
-        #   self.layers[ilayer].dJ_db = np.zeros((self.layers[ilayer].n_nodes, self.n_samples))
-        #   self.layers[ilayer].dJ_dw = np.zeros((self.n_samples, self.layers[ilayer].n_nodes, self.layers[ilayer].n_dim))
-        #   #for isample in range(self.n_samples):
-        #   for inode in range(self.layers[ilayer].n_nodes):
-        #       self.layers[ilayer].dJ_db[inode,:] =  self.dJ_db_diff(ilayer, inode, 0.001)[:]
-        #       for jnode in range(self.layers[ilayer].n_dim):
-        #           self.layers[ilayer].dJ_dw[:, inode, jnode] = self.dJ_dw_diff(ilayer, inode, jnode, 0.001)[:]
-
-        # Loop through the rest of layers from L-1 to 1
-        for iLayer in range(L-1, -1,-1): # range(start,stop,step)
-            self.layers[iLayer].grad_activation(self.layers[iLayer].z)  # Calculates da_dz
-            self.layers[iLayer].delta = np.multiply(np.matmul(self.layers[iLayer+1].W.transpose(), self.layers[iLayer+1].delta), self.layers[iLayer].da_dz)
-            # For each sample we calculate the dJ_dw and dJ_db
-            # size(dJ_dw) = (samples, size of W matrix)
-            self.layers[iLayer].dJ_dw = np.zeros((self.n_samples, self.layers[iLayer].n_nodes, self.layers[iLayer].n_dim))
-            # Preferred matrix arranged in columns for each sample so no need to loop through it
-            self.layers[iLayer].dJ_db = np.zeros((self.layers[iLayer].n_nodes, self.n_samples))
-            self.layers[iLayer].dJ_db = self.layers[iLayer].delta
-            for sample in range(self.n_samples):
-                if iLayer - 1 < 0:  # In this case the iLayer-1 is equal to the input layer
-                    self.layers[iLayer].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[iLayer].delta[:, sample][np.newaxis]), self.input_data[:, sample][np.newaxis])
+        for iLayer in range(L, -1, -1):
+            if iLayer == L:
+                delta_temp = np.multiply(delta_cost, da_dz)
+                self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T) / self.n_samples
+                self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T / self.n_samples
+                delta = np.matmul(self.layers[iLayer].W.T, delta_cost)
+            else:
+                da_dz = self.layers[iLayer].grad_activation(self.layers[iLayer].z)
+                delta_temp = np.multiply(delta, da_dz)
+                if iLayer == 0:
+                    self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.input_data.T)/self.n_samples
                 else:
-                    self.layers[iLayer].dJ_dw[sample, :, :] = np.matmul(np.transpose(self.layers[iLayer].delta[:, sample][np.newaxis]), self.layers[iLayer - 1].a[:, sample][np.newaxis])
+                    self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T)/self.n_samples
+                self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T/self.n_samples
+                delta = np.matmul(self.layers[iLayer].W.T, delta)
 
-        # For each layer update weights. The correction of the wights is the average of the dJ/dw and dJ/db for all
-        # the training sample
-        for ilayer, layer in enumerate(self.layers):
-            self.layers[ilayer].W = self.layers[ilayer].W - (self.learning_rate/self.n_samples)*self.layers[ilayer].dJ_dw.sum(axis=0)
-            self.layers[ilayer].b = self.layers[ilayer].b - (self.learning_rate/self.n_samples)*np.sum(self.layers[ilayer].dJ_db, axis=1)[np.newaxis].transpose()
+        for iLayer in range(L, -1, -1):
+            self.layers[iLayer].W += (self.learning_rate ) * self.layers[iLayer].dJ_dw
+            self.layers[iLayer].b += (self.learning_rate) * self.layers[iLayer].dJ_db
 
     def training(self):
         for iepoch in range(self.n_epoch):
             self.backpropagation()
+            predictions = self.forward_pass()
+            accuracy = self.get_accuracy(predictions)
+            print("epoch", iepoch, "accuracy", accuracy)
 
 class InputLayer:
     """Necessary basic input layer"""
@@ -261,27 +222,27 @@ training_data, validation_data, test_data = load_data_shared()
 
 
 # Only 5000 samples otherwise running out of memory
-training_data_input = training_data[0][0:5000].transpose()
+training_data_input = training_data[0][0:2].transpose()
 # One-hot encoding the outputs
 training_data_outputs = np.zeros((10, training_data_input.shape[1]))
 for iPos in range(training_data_input.shape[1]):
     training_data_outputs[training_data[1][iPos]][iPos] = 1
 
 
-layer1 = DenseLayer(training_data_input, 32, "sigmoid")
-layer2 = DenseLayer(np.zeros( layer1.get_output_size()), 16, "sigmoid")
-layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 10, "softmax")
+layer1 = DenseLayer(training_data_input, 200, "sigmoid")
+layer2 = DenseLayer(np.zeros( layer1.get_output_size()), 80, "sigmoid")
+layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 10, "sigmoid")
 
 
 layer_list = [layer1, layer2, layer3]
 
-NN = Network(layer_list, training_data_input, training_data_outputs, learning_rate=0.01, n_epoch=10)
+NN = Network(layer_list, training_data_input, training_data_outputs, learning_rate=0.1, n_epoch=100)
 
 NN.training()
 
 # NN.backpropagation()
 
 
-print(training_data)
+print('Hello')
 
 
