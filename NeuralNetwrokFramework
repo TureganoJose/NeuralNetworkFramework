@@ -7,40 +7,28 @@ import pickle
 class DenseLayer:
     """Basic definition of layer for neural networks"""
 
-    def __init__(self, input_data: np.ndarray, n_nodes: int, activation_function: str):
+    def __init__(self, raw_data: np.ndarray, n_nodes: int, activation_function: str):
         # Create Attributes
-        self.input_data = input_data
+        self.raw_data = raw_data
+        self.input_data = []
         self.n_nodes = n_nodes
-        self.n_dim, self.n_samples = input_data.shape  # columns indicate the number of training samples
+        self.n_dim, self.n_samples = raw_data.shape  # columns indicate the number of training samples
         self.activation_function = activation_function
 
         self.z = np.zeros((self.n_nodes, 1))
         self.W = np.random.randn(self.n_nodes, self.n_dim)*np.sqrt(1/((self.n_nodes + self.n_dim)))
-        self.b = np.ones((self.n_nodes, self.n_samples))  # Columns need to be similar
+        self.b = np.zeros((self.n_nodes, 1))  # Columns need to be similar
         self.a = np.zeros((self.n_nodes, 1))
         self.da_dz = []
-        self.dJ_dw = np.zeros((self.n_samples, self.n_nodes, self.n_dim))
-        self.dJ_db = np.zeros((self.n_nodes, self.n_samples ))
+        self.dJ_dw = np.zeros((self.n_nodes, self.n_dim))
+        self.dJ_db = np.ones((self.n_nodes, 1))
         self.delta = []
 
-    def forward_propagation(self):
-        self.z = np.dot(self.W, self.input_data) + self.b
+    def forward_propagation(self, input_data):
+        self.z = np.dot(self.W, input_data) + self.b
         self.a = self.forward_activation(self.z)
         return self.a
 
-    def forward_propagation_offset(self, input_values, j , k, offset):
-        tempW = self.W
-        tempW[j, k] = self.W[j, k] + offset
-        tempz = np.matmul(tempW, input_values) + self.b
-        tempa = self.forward_activation(tempz)
-        return tempa
-
-    def forward_propagation_boffset(self, input_values, j , boffset):
-        tempb = self.b
-        tempb[j,:] = self.b[j,:] + boffset
-        tempz = np.matmul(self.W, input_values) + tempb
-        tempa = self.forward_activation(tempz)
-        return tempa
 
     def forward_activation(self, z):
         if self.activation_function == "sigmoid":
@@ -87,25 +75,29 @@ class DenseLayer:
 class Network:
     """ Class contains layers"""
 
-    def __init__(self, layers: list, input_data: np.ndarray, output_targets: np.array, learning_rate: float, n_epoch: int):
+    def __init__(self, layers: list, raw_data: np.ndarray, output_targets: np.array, learning_rate: float, n_epoch: int, n_batch_size: int):
         self.layers = layers  # This is a list of layer classes
-        self.input_data = input_data
-        self.n_dim, self.n_samples = input_data.shape  # columns indicate the number of training samples
+        self.raw_data = raw_data
+        self.n_dim, self.n_samples = raw_data.shape  # columns indicate the number of training samples
         self.output_values = []
         self.matrix_cost = []
         self.output_targets = output_targets
         self.learning_rate = learning_rate
         self.dJ_da = []
         self.n_epoch = n_epoch
+        self.n_batch_size = n_batch_size
+        self.batched_input = []
+        self.batched_output = []
+        self.n_batches = []
 
-    def forward_pass(self):
+    def forward_pass(self, input_data):
         output_values = []
         for ilayer, layer in enumerate(self.layers):
             if ilayer == 0:
-                self.layers[ilayer].input_data = self.input_data
+                self.layers[ilayer].input_data = input_data
             else:
                 self.layers[ilayer].input_data = output_values
-            output_values = self.layers[ilayer].forward_propagation()
+            output_values = self.layers[ilayer].forward_propagation(self.layers[ilayer].input_data)
         self.output_values = output_values
         return self.output_values
 
@@ -135,12 +127,12 @@ class Network:
         return - (1/1) * np.sum(np.multiply(self.output_targets, np.log(input_predictions)), axis=0)
 
 
-    def derivative_cost(self, predictions):
+    def derivative_cost(self, predictions, targets):
         #  (self.matrix_cost - self.output_targets)/(self.matrix_cost - np.multiply(self.matrix_cost, self.matrix_cost))
         """Derivative of cost relative to a or last layer's activation function, softmax usually dJ_da"""
         #https://condor.depaul.edu/~ntomuro/courses/578/notes/3-Backprop-More.pdf
         #return np.divide(-self.output_targets[:, isample][np.newaxis].transpose(), predictions)
-        return np.divide(predictions - self.output_targets[:, :][np.newaxis].transpose(), predictions * (1-predictions))
+        return -np.divide(predictions - targets, predictions * (1-predictions))
 
     # an auxiliary function that converts probability into class
     def convert_prob_into_binary(self, predictions, threshold):
@@ -153,13 +145,14 @@ class Network:
         prediction_binary = self.convert_prob_into_binary(predictions, 0.5)
         return (prediction_binary == self.output_targets).all(axis=0).mean()
 
-    def backpropagation(self):
-        predictions = self.forward_pass()
+    def backpropagation(self, input_data, output_targets):
+        n_samples_per_batch = input_data.shape[1]
+        predictions = self.forward_pass(input_data)
         # First calculate error (self.delta) of output layer
         L = len(self.layers) - 1
         # Number of outputs equal to number of nodes of the output layer
         self.layers[L].delta = np.zeros((self.layers[L].n_nodes, self.n_samples))
-        dCost_da = self.derivative_cost(predictions)  # Calculates dJ_da of output layer
+        dCost_da = self.derivative_cost(predictions, output_targets)  # Calculates dJ_da of output layer
         da_dz = self.layers[L].grad_activation(self.layers[L].z)  # Calculates da_dz
         if self.layers[L].activation_function == "softmax":
             # Softmax case is a bit special because Jacobian
@@ -168,34 +161,53 @@ class Network:
         else:
             delta_cost = np.multiply(da_dz, dCost_da)
 
-        delta_cost = self.output_targets - predictions
+        delta_cost = output_targets - predictions
 
         for iLayer in range(L, -1, -1):
             if iLayer == L:
                 delta_temp = np.multiply(delta_cost, da_dz)
-                self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T) / self.n_samples
-                self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T / self.n_samples
+                self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T) / n_samples_per_batch
+                self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T / n_samples_per_batch
                 delta = np.matmul(self.layers[iLayer].W.T, delta_cost)
             else:
                 da_dz = self.layers[iLayer].grad_activation(self.layers[iLayer].z)
                 delta_temp = np.multiply(delta, da_dz)
                 if iLayer == 0:
-                    self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.input_data.T)/self.n_samples
+                    self.layers[iLayer].dJ_dw = np.matmul(delta_temp, input_data.T)/n_samples_per_batch
                 else:
-                    self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T)/self.n_samples
-                self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T/self.n_samples
+                    self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T)/n_samples_per_batch
+                self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T/n_samples_per_batch
                 delta = np.matmul(self.layers[iLayer].W.T, delta)
 
+        # Update weights
         for iLayer in range(L, -1, -1):
             self.layers[iLayer].W += (self.learning_rate ) * self.layers[iLayer].dJ_dw
             self.layers[iLayer].b += (self.learning_rate) * self.layers[iLayer].dJ_db
 
+    def create_minibatches(self):
+        if self.n_samples % self.n_batch_size != 0:
+            print("Warning: create_minibatches(): Batch size {0} does not evenly divide the number of examples {1}.".format(self.n_batch_size, self.n_samples))
+        batched_input = []
+        batched_output = []
+        idx = 0
+        while idx + self.n_batch_size <= self.n_samples:
+            batched_input.append(self.raw_data[:, idx:idx+self.n_batch_size])
+            batched_output.append(self.output_targets[:, idx:idx+self.n_batch_size])
+            idx += self.n_batch_size
+
+        return batched_input, batched_output
+
     def training(self):
+        #if self.n_batch_size > 1:
+        self.batched_input, self.batched_output = self.create_minibatches()
+        self.n_batches = len(self.batched_input)
         for iepoch in range(self.n_epoch):
-            self.backpropagation()
-            predictions = self.forward_pass()
+            for ibatch in range(self.n_batches):
+                self.backpropagation(self.batched_input[ibatch], self.batched_output[ibatch])
+            predictions = self.forward_pass(self.raw_data)
             accuracy = self.get_accuracy(predictions)
             print("epoch", iepoch, "accuracy", accuracy)
+
 
 class InputLayer:
     """Necessary basic input layer"""
@@ -222,7 +234,7 @@ training_data, validation_data, test_data = load_data_shared()
 
 
 # Only 5000 samples otherwise running out of memory
-training_data_input = training_data[0][0:2].transpose()
+training_data_input = training_data[0][0:50000].transpose()
 # One-hot encoding the outputs
 training_data_outputs = np.zeros((10, training_data_input.shape[1]))
 for iPos in range(training_data_input.shape[1]):
@@ -236,7 +248,7 @@ layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 10, "sigmoid")
 
 layer_list = [layer1, layer2, layer3]
 
-NN = Network(layer_list, training_data_input, training_data_outputs, learning_rate=0.1, n_epoch=100)
+NN = Network(layer_list, training_data_input, training_data_outputs, learning_rate=0.1, n_epoch=10, n_batch_size=50)
 
 NN.training()
 
