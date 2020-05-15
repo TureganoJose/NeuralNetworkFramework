@@ -11,9 +11,10 @@ Implemented the following activations:
 - relu
 - softmax (the derivative is a Jacobian)
 
+Tested it with the usual MNIST and make moons datasets(from scikit)
 Also added mini-batch and L2-regularization
-
 Overfitting:
+
 ![No regularization](regu_0.gif)
 
 L2 Regularization:
@@ -23,5 +24,5 @@ This is pretty much a least squares with Tikhonov regularization (aka Ridge).
 
 ## Resources
 There is a lot of stuff out there, mostly low quality. It is difficult to find good material. Loads of crappy explanations in Medium and other blogs. Stick to academia.
-https://www.deeplearningbook.org/
-http://cs229.stanford.edu/notes/cs229-notes-deep_learning.pdf
+- https://www.deeplearningbook.org/
+- http://cs229.stanford.edu/notes/cs229-notes-deep_learning.pdf
