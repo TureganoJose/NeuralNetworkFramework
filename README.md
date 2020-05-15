@@ -14,7 +14,7 @@ Implemented the following activations:
 Tested it with the usual MNIST and make moons datasets(from scikit)
 Also added mini-batch and L2-regularization
 Overfitting:
-
+ 
 ![No regularization](regu_0.gif)
 
 L2 Regularization:
