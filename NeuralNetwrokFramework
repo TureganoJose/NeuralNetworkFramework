@@ -2,7 +2,10 @@ import numpy as np
 import scipy as sp
 import gzip
 import pickle
-
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from sklearn.datasets import make_moons
+from PIL import Image
 
 class DenseLayer:
     """Basic definition of layer for neural networks"""
@@ -57,8 +60,8 @@ class DenseLayer:
             a= self.forward_activation(z)
             # Usually softmax is in the output layer hence n_nodes = n_outputs
             # Each sample has its own Jacobian size(n_outputs x n_outputs)
-            jacobian_a = np.zeros((self.n_samples, self.n_nodes, self.n_nodes))
-            for sample in range(self.n_samples):
+            jacobian_a = np.zeros((z.shape[1], self.n_nodes, self.n_nodes))
+            for sample in range(z.shape[1]):
                 for i in range(self.n_nodes):
                     for j in range(self.n_nodes):
                         if i == j:
@@ -75,10 +78,12 @@ class DenseLayer:
 class Network:
     """ Class contains layers"""
 
-    def __init__(self, layers: list, raw_data: np.ndarray, output_targets: np.array, learning_rate: float, n_epoch: int, n_batch_size: int):
+    def __init__(self, layers: list, raw_data: np.ndarray, output_targets: np.array, lambd: float, learning_rate: float, n_epoch: int, n_batch_size: int, loss_function: str):
         self.layers = layers  # This is a list of layer classes
         self.raw_data = raw_data
         self.n_dim, self.n_samples = raw_data.shape  # columns indicate the number of training samples
+        self.lambd = lambd # Regularization
+        self.loss_function = loss_function
         self.output_values = []
         self.matrix_cost = []
         self.output_targets = output_targets
@@ -122,9 +127,20 @@ class Network:
         # - np.sum(((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))/self.n_samples
         return - (1/self.n_samples)*np.sum(np.multiply(self.output_targets, np.log(self.output_values)))
 
-    def calculate_cost_pred(self, input_predictions):
+    def calculate_cost_pred(self, input_predictions, input_targets):
+        self.lambd_cost = 0
+        if self.lambd > 0.0:
+            for ilayer, layer in enumerate(self.layers):
+                self.lambd_cost = np.sum(self.layers[ilayer].W**2)
+        self.lambd_cost *= self.lambd / (2 * self.n_samples)
         # - np.sum(((1-self.output_targets)*np.log(1-self.output_values)+self.output_targets*np.log(self.output_values)))/self.n_samples
-        return - (1/1) * np.sum(np.multiply(self.output_targets, np.log(input_predictions)), axis=0)
+        if self.loss_function == "cross_entropy":  # Binary classification
+            return - (1/self.n_samples) * np.sum(np.nan_to_num(-input_targets*np.log(input_predictions)-(1-input_targets)*np.log(1-input_predictions))) + self.lambd_cost
+        elif self.loss_function == "mse":
+            return np.sqrt( (1.0 / self.n_samples) * np.sum((input_predictions - input_targets)**2)) + self.lambd_cost
+        elif self.loss_function == "log_likelihood":  # Multi-class
+            return - (1/self.n_samples) * np.sum(np.log(input_predictions)) + self.lambd_cost
+
 
 
     def derivative_cost(self, predictions, targets):
@@ -132,7 +148,13 @@ class Network:
         """Derivative of cost relative to a or last layer's activation function, softmax usually dJ_da"""
         #https://condor.depaul.edu/~ntomuro/courses/578/notes/3-Backprop-More.pdf
         #return np.divide(-self.output_targets[:, isample][np.newaxis].transpose(), predictions)
-        return -np.divide(predictions - targets, predictions * (1-predictions))
+        if self.loss_function == "cross_entropy":  # Binary classification
+            return -np.divide(predictions - targets, predictions * (1-predictions))
+        elif self.loss_function == "mse":
+            return -(targets - predictions)
+        elif self.loss_function == "log_likelihood":  # Multi-class
+            return -np.divide(predictions - targets, predictions * (1-predictions))
+
 
     # an auxiliary function that converts probability into class
     def convert_prob_into_binary(self, predictions, threshold):
@@ -151,33 +173,87 @@ class Network:
         # First calculate error (self.delta) of output layer
         L = len(self.layers) - 1
         # Number of outputs equal to number of nodes of the output layer
-        self.layers[L].delta = np.zeros((self.layers[L].n_nodes, self.n_samples))
-        dCost_da = self.derivative_cost(predictions, output_targets)  # Calculates dJ_da of output layer
-        da_dz = self.layers[L].grad_activation(self.layers[L].z)  # Calculates da_dz
-        if self.layers[L].activation_function == "softmax":
-            # Softmax case is a bit special because Jacobian
-            for sample in range(self.n_samples):
-                delta_cost = np.matmul(da_dz, dCost_da)
-        else:
-            delta_cost = np.multiply(da_dz, dCost_da)
+        # self.layers[L].delta = np.zeros((self.layers[L].n_nodes, self.n_samples))
+        # dCost_da = self.derivative_cost(predictions, output_targets)  # Calculates dJ_da of output layer
+        # da_dz = self.layers[L].grad_activation(self.layers[L].z)  # Calculates da_dz
+        # delta_cost = np.zeros((predictions.shape[0], n_samples_per_batch))
+        # if self.layers[L].activation_function == "softmax":
+        #     # Softmax case is a bit special because Jacobian
+        #     for sample in range(n_samples_per_batch):
+        #         delta_cost[:, sample] = np.matmul(da_dz[sample, :, :], dCost_da[:, sample])
+        # else:
+        #     delta_cost = np.multiply(da_dz, dCost_da)
 
-        delta_cost = output_targets - predictions
+        dJ_dz = output_targets - predictions
 
         for iLayer in range(L, -1, -1):
             if iLayer == L:
-                delta_temp = np.multiply(delta_cost, da_dz)
-                self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T) / n_samples_per_batch
-                self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T / n_samples_per_batch
-                delta = np.matmul(self.layers[iLayer].W.T, delta_cost)
+                # if self.layers[L].activation_function == "softmax":
+                #     delta_temp = np.zeros((predictions.shape[0], n_samples_per_batch))
+                #     # Softmax case is a bit special because Jacobian
+                #     for sample in range(n_samples_per_batch):
+                #         delta_temp[:, sample] = np.matmul(da_dz[sample, :, :], delta_cost[:, sample][np.newaxis].T)
+                # else:
+                #     delta_temp = np.multiply(delta_cost, da_dz)
+                self.layers[iLayer].dJ_dw = np.matmul(dJ_dz, self.layers[iLayer - 1].a.T) / n_samples_per_batch
+                self.layers[iLayer].dJ_dw += (self.lambd / self.n_samples) * self.layers[iLayer].W
+                self.layers[iLayer].dJ_db = np.sum(dJ_dz, axis=1)[np.newaxis].T / n_samples_per_batch
             else:
                 da_dz = self.layers[iLayer].grad_activation(self.layers[iLayer].z)
-                delta_temp = np.multiply(delta, da_dz)
+                dJ_da = np.matmul(self.layers[iLayer+1].W.T, dJ_dz)
+                dJ_dz = np.multiply(dJ_da, da_dz)
+
                 if iLayer == 0:
-                    self.layers[iLayer].dJ_dw = np.matmul(delta_temp, input_data.T)/n_samples_per_batch
+                    self.layers[iLayer].dJ_dw = np.matmul(dJ_dz, input_data.T) / n_samples_per_batch
                 else:
-                    self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T)/n_samples_per_batch
-                self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T/n_samples_per_batch
-                delta = np.matmul(self.layers[iLayer].W.T, delta)
+                    self.layers[iLayer].dJ_dw = np.matmul(dJ_dz,
+                                                          self.layers[iLayer - 1].a.T) / n_samples_per_batch
+                self.layers[iLayer].dJ_dw += (self.lambd / self.n_samples) * self.layers[iLayer].W
+                self.layers[iLayer].dJ_db = np.sum(dJ_dz, axis=1)[np.newaxis].T / n_samples_per_batch
+
+
+    # def backpropagation(self, input_data, output_targets):
+    #     n_samples_per_batch = input_data.shape[1]
+    #     predictions = self.forward_pass(input_data)
+    #     # First calculate error (self.delta) of output layer
+    #     L = len(self.layers) - 1
+    #     # Number of outputs equal to number of nodes of the output layer
+    #     self.layers[L].delta = np.zeros((self.layers[L].n_nodes, self.n_samples))
+    #     dCost_da = self.derivative_cost(predictions, output_targets)  # Calculates dJ_da of output layer
+    #     da_dz = self.layers[L].grad_activation(self.layers[L].z)  # Calculates da_dz
+    #     delta_cost = np.zeros((predictions.shape[0] ,n_samples_per_batch))
+    #     if self.layers[L].activation_function == "softmax":
+    #         # Softmax case is a bit special because Jacobian
+    #         for sample in range(n_samples_per_batch):
+    #             delta_cost[:, sample] = np.matmul(da_dz[sample,:,:], dCost_da[:, sample])
+    #     else:
+    #         delta_cost = np.multiply(da_dz, dCost_da)
+    #
+    #     delta_cost = output_targets - predictions
+    #
+    #     for iLayer in range(L, -1, -1):
+    #         if iLayer == L:
+    #             if self.layers[L].activation_function == "softmax":
+    #                 delta_temp = np.zeros((predictions.shape[0], n_samples_per_batch))
+    #                 # Softmax case is a bit special because Jacobian
+    #                 for sample in range(n_samples_per_batch):
+    #                     delta_temp[:, sample] = np.matmul(da_dz[sample, :, :], delta_cost[:, sample][np.newaxis].T)
+    #             else:
+    #                 delta_temp = np.multiply(delta_cost, da_dz)
+    #             self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T) / n_samples_per_batch
+    #             self.layers[iLayer].dJ_dw += (self.lambd/n_samples_per_batch) * self.layers[iLayer].W
+    #             self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T / n_samples_per_batch
+    #             delta = np.matmul(self.layers[iLayer].W.T, delta_cost)
+    #         else:
+    #             da_dz = self.layers[iLayer].grad_activation(self.layers[iLayer].z)
+    #             delta_temp = np.multiply(delta, da_dz)
+    #             if iLayer == 0:
+    #                 self.layers[iLayer].dJ_dw = np.matmul(delta_temp, input_data.T)/n_samples_per_batch
+    #             else:
+    #                 self.layers[iLayer].dJ_dw = np.matmul(delta_temp, self.layers[iLayer - 1].a.T)/n_samples_per_batch
+    #             self.layers[iLayer].dJ_dw += (self.lambd / n_samples_per_batch) * self.layers[iLayer].W
+    #             self.layers[iLayer].dJ_db = np.sum(delta_temp, axis=1)[np.newaxis].T/n_samples_per_batch
+    #             delta = np.matmul(self.layers[iLayer].W.T, delta)
 
         # Update weights
         for iLayer in range(L, -1, -1):
@@ -197,18 +273,47 @@ class Network:
 
         return batched_input, batched_output
 
+    def plot_dec_bound(self, X, iepoch):
+        # Set min and max values and give it some padding
+        x_min, x_max = X[0, :].min() - 1, X[0, :].max() + 1
+        y_min, y_max = X[1, :].min() - 1, X[1, :].max() + 1
+        h = 0.01
+        # Generate a grid of points with distance h between them
+        xx, yy = np.meshgrid(np.arange(x_min, x_max, h), np.arange(y_min, y_max, h))
+        # Predict the function value for the whole grid
+        Z = self.forward_pass(np.c_[xx.ravel(), yy.ravel()].T)
+        Z = Z.reshape(xx.shape)
+        # Plot the contour and training examples
+        plt.contourf(xx, yy, Z, cmap=plt.cm.Spectral)
+        plt.scatter(X[0, :], X[1, :], c=colour, cmap=plt.cm.Spectral)
+        plt.ylabel('x2')
+        plt.xlabel('x1')
+        plt.title('Decision Boundary - L2 Regularization 0.05 Epoch {0}'.format(iepoch))
+        plt.savefig('testplot'+str(iepoch)+'.png')
+        #plt.show()
+        return
+
     def training(self):
         #if self.n_batch_size > 1:
         self.batched_input, self.batched_output = self.create_minibatches()
         self.n_batches = len(self.batched_input)
+        # images = []
+        # icount=0
         for iepoch in range(self.n_epoch):
             for ibatch in range(self.n_batches):
                 self.backpropagation(self.batched_input[ibatch], self.batched_output[ibatch])
             predictions = self.forward_pass(self.raw_data)
             accuracy = self.get_accuracy(predictions)
-            print("epoch", iepoch, "accuracy", accuracy)
-
-
+            losses = self.calculate_cost_pred(predictions, self.output_targets)
+            print("epoch", iepoch,"loss", losses, "accuracy", accuracy)
+        #     icount += 1
+        #     if icount > 5:
+        #         icount = 0
+        #         self.plot_dec_bound(self.raw_data, iepoch)
+        #         ims = Image.open('testplot' + str(iepoch) + '.png')
+        #         images.append(ims)
+        # images[0].save('regu_0_05.gif',
+        #                save_all=True, append_images=images[1:], optimize=False, duration=400, loop=0)
 class InputLayer:
     """Necessary basic input layer"""
 
@@ -222,39 +327,68 @@ class OutputLayer:
     def __init__(self, input_data: np.ndarray):
         self.input_data = input_data
 
-# Load the MNIST data
-def load_data_shared(filename="C:/Workspaces/NeuralNetworkFramework/data/mnist.pkl.gz"):
-    f = gzip.open(filename, 'rb')
-    training_data, validation_data, test_data = pickle.load(f, encoding="latin1")
-    f.close()
-    return training_data, validation_data, test_data
 
 
-training_data, validation_data, test_data = load_data_shared()
+
+# ########## MNIST EXAMPLE #############
+#
+# #Load the MNIST data
+# def load_data_shared(filename="C:/Workspaces/NeuralNetworkFramework/data/mnist.pkl.gz"):
+#     f = gzip.open(filename, 'rb')
+#     training_data, validation_data, test_data = pickle.load(f, encoding="latin1")
+#     f.close()
+#     return training_data, validation_data, test_data
+#
+#
+# training_data, validation_data, test_data = load_data_shared()
+# # Only 5000 samples otherwise running out of memory
+# training_data_input = training_data[0][0:50000].transpose()
+# # One-hot encoding the outputs
+# training_data_outputs = np.zeros((10, training_data_input.shape[1]))
+# for iPos in range(training_data_input.shape[1]):
+#     training_data_outputs[training_data[1][iPos]][iPos] = 1
+#
+#
+# layer1 = DenseLayer(training_data_input, 200, "sigmoid")
+# layer2 = DenseLayer(np.zeros( layer1.get_output_size()), 80, "sigmoid")
+# layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 10, "sigmoid")
+#
+# layer_list = [layer1, layer2, layer3]
+#
+# NN = Network(layer_list, training_data_input, training_data_outputs, lambd=0.02, learning_rate=0.1, n_epoch=10, n_batch_size=50, loss_function="cross_entropy")
+#
+# NN.training()
+#
 
 
-# Only 5000 samples otherwise running out of memory
-training_data_input = training_data[0][0:50000].transpose()
-# One-hot encoding the outputs
-training_data_outputs = np.zeros((10, training_data_input.shape[1]))
-for iPos in range(training_data_input.shape[1]):
-    training_data_outputs[training_data[1][iPos]][iPos] = 1
+############## MOON DATA ################
 
+X, Y = make_moons(n_samples=30, noise=0.3, random_state=1)
+X = X.T
+colour = Y
+Y = Y[:][np.newaxis]
+plt.scatter(X[0, :], X[1, :], c=colour, s=40, cmap=plt.cm.Spectral)
+plt.grid()
+plt.show()
+plt.ylabel('x2')
+plt.xlabel('x1')
+plt.title('Raw data')
 
-layer1 = DenseLayer(training_data_input, 200, "sigmoid")
-layer2 = DenseLayer(np.zeros( layer1.get_output_size()), 80, "sigmoid")
-layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 10, "sigmoid")
+layer1 = DenseLayer(X, 16, "relu")
+layer2 = DenseLayer(np.zeros( layer1.get_output_size()), 8, "relu")
+layer3 = DenseLayer(np.zeros( layer2.get_output_size()), 4, "relu")
+layer4 = DenseLayer(np.zeros( layer3.get_output_size()), 2, "relu")
+layer5 = DenseLayer(np.zeros( layer4.get_output_size()), 1, "sigmoid")
 
+layer_list = [layer1, layer2, layer3, layer4, layer5]
 
-layer_list = [layer1, layer2, layer3]
-
-NN = Network(layer_list, training_data_input, training_data_outputs, learning_rate=0.1, n_epoch=10, n_batch_size=50)
+NN = Network(layer_list, X, Y, lambd=0.05, learning_rate=0.05, n_epoch=300, n_batch_size=1, loss_function="cross_entropy")
 
 NN.training()
 
-# NN.backpropagation()
 
 
-print('Hello')
+
+print('Bye!')
 
 
